@@ -20,3 +20,5 @@ build/
 .project
 .classpath
 .c9/
+
+.upload/
