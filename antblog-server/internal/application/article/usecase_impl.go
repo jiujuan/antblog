@@ -8,6 +8,7 @@ import (
 
 	apptag "antblog/internal/application/tag"
 	domain "antblog/internal/domain/article"
+	domaincategory "antblog/internal/domain/category"
 	domaintag "antblog/internal/domain/tag"
 	apperrors "antblog/pkg/errors"
 	"antblog/pkg/utils"
@@ -19,25 +20,28 @@ import (
 type Deps struct {
 	fx.In
 	Repo          domain.IArticleRepository
+	CategoryRepo  domaincategory.ICategoryRepository
 	TagRepo       domaintag.ITagRepository
 	DomainService domain.IDomainService
 	Logger        *zap.Logger
 }
 
 type articleUseCase struct {
-	repo    domain.IArticleRepository
-	tagRepo domaintag.ITagRepository
-	svc     domain.IDomainService
-	logger  *zap.Logger
+	repo         domain.IArticleRepository
+	categoryRepo domaincategory.ICategoryRepository
+	tagRepo      domaintag.ITagRepository
+	svc          domain.IDomainService
+	logger       *zap.Logger
 }
 
 // NewArticleUseCase 创建文章用例（fx provider）
 func NewArticleUseCase(deps Deps) IArticleUseCase {
 	return &articleUseCase{
-		repo:    deps.Repo,
-		tagRepo: deps.TagRepo,
-		svc:     deps.DomainService,
-		logger:  deps.Logger,
+		repo:         deps.Repo,
+		categoryRepo: deps.CategoryRepo,
+		tagRepo:      deps.TagRepo,
+		svc:          deps.DomainService,
+		logger:       deps.Logger,
 	}
 }
 
@@ -266,6 +270,7 @@ func (uc *articleUseCase) CreateArticle(ctx context.Context, authorID uint64, re
 
 	// 5. 更新标签文章计数
 	go uc.incrTagCounts(created.TagIDs, 1)
+	uc.syncCategoryCountOnCreate(created)
 
 	uc.logger.Info("article created",
 		zap.Uint64("id", created.ID),
@@ -282,6 +287,7 @@ func (uc *articleUseCase) UpdateArticle(ctx context.Context, id uint64, req *Upd
 		return nil, apperrors.ErrArticleNotFound()
 	}
 	oldTagIDs := a.TagIDs
+	oldCategoryID := a.CategoryID
 
 	// 2. 领域校验
 	if err = uc.svc.ValidateUpdate(ctx, id, req.Title, req.Slug); err != nil {
@@ -312,6 +318,7 @@ func (uc *articleUseCase) UpdateArticle(ctx context.Context, id uint64, req *Upd
 
 	// 6. 同步标签计数变化（异步）
 	go uc.syncTagCounts(oldTagIDs, req.TagIDs)
+	uc.syncCategoryCountOnCategoryChange(a.Status, oldCategoryID, req.CategoryID)
 
 	uc.logger.Info("article updated", zap.Uint64("id", id), zap.String("title", a.Title))
 	return uc.toArticleResp(ctx, a), nil
@@ -324,6 +331,7 @@ func (uc *articleUseCase) UpdateArticleStatus(ctx context.Context, id uint64, re
 	}
 
 	newStatus := domain.Status(req.Status)
+	oldStatus := a.Status
 	switch newStatus {
 	case domain.StatusPublished:
 		a.Publish()
@@ -338,6 +346,7 @@ func (uc *articleUseCase) UpdateArticleStatus(ctx context.Context, id uint64, re
 	if err = uc.repo.UpdateStatus(ctx, id, a.Status, a.PublishedAt); err != nil {
 		return nil, apperrors.ErrInternalError(err)
 	}
+	uc.syncCategoryCountOnStatusChange(oldStatus, a.Status, a.CategoryID)
 
 	uc.logger.Info("article status updated",
 		zap.Uint64("id", id),
@@ -357,6 +366,7 @@ func (uc *articleUseCase) DeleteArticle(ctx context.Context, id uint64) error {
 	}
 	// 删除后更新标签计数
 	go uc.incrTagCounts(a.TagIDs, -1)
+	uc.syncCategoryCountOnDelete(a)
 	uc.logger.Info("article deleted", zap.Uint64("id", id))
 	return nil
 }
@@ -513,6 +523,65 @@ func (uc *articleUseCase) syncTagCounts(oldIDs, newIDs []uint64) {
 			_ = uc.tagRepo.IncrArticleCount(context.Background(), id, -1)
 		}
 	}
+}
+
+func (uc *articleUseCase) syncCategoryCountOnCreate(a *domain.Article) {
+	if a == nil || a.CategoryID == nil || a.Status != domain.StatusPublished {
+		return
+	}
+	uc.incrCategoryCount(*a.CategoryID, 1)
+}
+
+func (uc *articleUseCase) syncCategoryCountOnDelete(a *domain.Article) {
+	if a == nil || a.CategoryID == nil || a.Status != domain.StatusPublished {
+		return
+	}
+	uc.incrCategoryCount(*a.CategoryID, -1)
+}
+
+func (uc *articleUseCase) syncCategoryCountOnCategoryChange(status domain.Status, oldCategoryID, newCategoryID *uint64) {
+	if status != domain.StatusPublished {
+		return
+	}
+	if categoryIDEq(oldCategoryID, newCategoryID) {
+		return
+	}
+	if oldCategoryID != nil {
+		uc.incrCategoryCount(*oldCategoryID, -1)
+	}
+	if newCategoryID != nil {
+		uc.incrCategoryCount(*newCategoryID, 1)
+	}
+}
+
+func (uc *articleUseCase) syncCategoryCountOnStatusChange(oldStatus, newStatus domain.Status, categoryID *uint64) {
+	if categoryID == nil || oldStatus == newStatus {
+		return
+	}
+	if oldStatus != domain.StatusPublished && newStatus == domain.StatusPublished {
+		uc.incrCategoryCount(*categoryID, 1)
+		return
+	}
+	if oldStatus == domain.StatusPublished && newStatus != domain.StatusPublished {
+		uc.incrCategoryCount(*categoryID, -1)
+	}
+}
+
+func (uc *articleUseCase) incrCategoryCount(categoryID uint64, delta int) {
+	if err := uc.categoryRepo.IncrArticleCount(context.Background(), categoryID, delta); err != nil {
+		uc.logger.Warn("incr category article_count failed",
+			zap.Uint64("category_id", categoryID), zap.Int("delta", delta), zap.Error(err))
+	}
+}
+
+func categoryIDEq(a, b *uint64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 // ─── fx Module ───────────────────────────────────────────────────────────────
