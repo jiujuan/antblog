@@ -1,6 +1,7 @@
 # AntBlog 后端项目结构
 
 > 技术栈：Go + Gin + GORM + Zap + Viper + Validator + go-jwt + go-redis + uber/fx
+> 
 > 架构：DDD + Clean Architecture + 依赖倒置
 
 ```
