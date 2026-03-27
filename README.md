@@ -23,8 +23,8 @@ admin管理员后台管理：
 
 后台管理员默认账号：
 
-- 用户名：admin
-- 密码：Admin@2026
+用户名：admin
+密码：Admin@2026
 
 - 文章分类、归档（按时间线）
 
@@ -38,7 +38,7 @@ admin管理员后台管理：
 
 ### 后端技术
 
-用Go 语言，结合 Gin + GORM + Zap + Viper +validator+go-jwt+go-redis 技术栈。
+用 Go 语言，结合 Gin + GORM + Zap + Viper +validator+go-jwt+go-redis 技术栈。
 
 - MySQL
 - Redis
