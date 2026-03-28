@@ -1,3 +1,5 @@
+-- 先在 MySQL 数据库中创建数据库 antblog
+
 CREATE TABLE IF NOT EXISTS `users` (
     `id`         BIGINT       UNSIGNED NOT NULL AUTO_INCREMENT        COMMENT '用户ID',
     `uuid`       CHAR(36)     NOT NULL                                COMMENT '全局唯一标识 UUID v4',
